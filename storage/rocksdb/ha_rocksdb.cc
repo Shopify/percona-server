@@ -12799,8 +12799,8 @@ ha_rows ha_rocksdb::records_in_range(uint inx, key_range *const min_key,
     To prevent this, changing estimated records slightly smaller than
     stats.records.
   */
-  if (ret >= stats.records) {
-    ret = stats.records * 0.99;
+  if (ret > stats.records / 2) {
+    ret = stats.records / 2;
   }
 
   if (rocksdb_debug_optimizer_n_rows > 0) {
