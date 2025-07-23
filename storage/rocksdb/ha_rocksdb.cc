@@ -16668,6 +16668,10 @@ double ha_rocksdb::read_time(uint index, uint ranges, ha_rows rows) {
   DBUG_RETURN((rows / 20.0) + 1);
 }
 
+longlong ha_rocksdb::get_memory_buffer_size() const {
+  return rocksdb_block_cache_size;
+}
+
 void ha_rocksdb::print_error(int error, myf errflag) {
   switch (error) {
     case HA_ERR_ROCKSDB_STATUS_BUSY:
