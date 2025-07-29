@@ -16669,7 +16669,7 @@ double ha_rocksdb::read_time(uint index, uint ranges, ha_rows rows) {
 }
 
 longlong ha_rocksdb::get_memory_buffer_size() const {
-  return rocksdb_block_cache_size;
+  return std::numeric_limits<longlong>::max();
 }
 
 void ha_rocksdb::print_error(int error, myf errflag) {
