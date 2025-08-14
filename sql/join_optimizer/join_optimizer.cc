@@ -1496,14 +1496,14 @@ bool CostingReceiver::FindIndexRangeScans(
       // case that creates multiple candidates). ANDs in index merges are pretty
       // much always handled nonexactly (see the comment on PossibleIndexMerge),
       // ie., we pick one part of the conjunction and have to check the other
-      // by filter. Verify that the ANDing marked the tree as inexact.
-      assert(merge.inexact || new_tree->merges.size() == 1);
+      // by filter. So we need to note here that this has happened.
+      merge.inexact |= (new_tree->merges.size() > 1);
 
       // Similarly, if there is also range scan arising from this predicate
       // (again because of an AND inside an OR), we need to handle the index
       // merge nonexactly, as the index merge will need to have the range
       // predicate in a filter on top of it.
-      assert(merge.inexact || new_tree->keys_map.is_clear_all());
+      merge.inexact |= !new_tree->keys_map.is_clear_all();
 
       index_merges.push_back(merge);
     }
