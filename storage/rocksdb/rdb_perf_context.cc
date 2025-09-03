@@ -21,11 +21,15 @@
 /* C++ system header files */
 #include <string>
 
+/* MySQL header files */
+#include "sql/sql_class.h"
+
 /* RocksDB header files */
 #include "rocksdb/iostats_context.h"
 #include "rocksdb/perf_context.h"
 
 /* MyRocks header files */
+#include "./ha_rocksdb.h"
 #include "./ha_rocksdb_proto.h"
 
 namespace myrocks {
@@ -214,7 +218,8 @@ bool Rdb_io_perf::start(const uint32_t perf_context_level) {
   return true;
 }
 
-void Rdb_io_perf::end_and_record(const uint32_t perf_context_level) {
+void Rdb_io_perf::end_and_record(THD *thd) {
+  const uint32_t perf_context_level = rocksdb_perf_context_level(thd);
   const rocksdb::PerfLevel perf_level =
       static_cast<rocksdb::PerfLevel>(perf_context_level);
 
@@ -245,6 +250,16 @@ void Rdb_io_perf::end_and_record(const uint32_t perf_context_level) {
         rocksdb::get_perf_context()->block_read_time;
 
     m_shared_io_perf_read->sum(io_perf_read);
+  }
+
+  if (rocksdb::get_perf_context()->internal_key_skipped_count != 0) {
+    thd->status_var.ha_key_skipped_count +=
+        rocksdb::get_perf_context()->internal_key_skipped_count;
+  }
+
+  if (rocksdb::get_perf_context()->internal_delete_skipped_count != 0) {
+    thd->status_var.ha_delete_skipped_count +=
+        rocksdb::get_perf_context()->internal_delete_skipped_count;
   }
 }
 

@@ -2869,7 +2869,7 @@ static void rocksdb_drop_index_wakeup_thread(
   }
 }
 
-static uint32_t rocksdb_perf_context_level(THD *const thd) {
+uint32_t rocksdb_perf_context_level(THD *const thd) {
   assert(thd != nullptr);
 
   const int session_perf_context_level = THDVAR(thd, perf_context_level);
@@ -3144,7 +3144,7 @@ class Rdb_transaction {
 
   void io_perf_end_and_record(void) {
     if (m_tbl_io_perf != nullptr) {
-      m_tbl_io_perf->end_and_record(rocksdb_perf_context_level(m_thd));
+      m_tbl_io_perf->end_and_record(m_thd);
       m_tbl_io_perf = nullptr;
     }
   }
@@ -4851,19 +4851,19 @@ class Rdb_perf_context_guard {
   Rdb_io_perf m_io_perf;
   Rdb_io_perf *m_io_perf_ptr;
   Rdb_transaction *m_tx;
-  uint m_level;
+  THD *m_thd;
 
  public:
   Rdb_perf_context_guard(const Rdb_perf_context_guard &) = delete;
   Rdb_perf_context_guard &operator=(const Rdb_perf_context_guard &) = delete;
 
-  explicit Rdb_perf_context_guard(Rdb_io_perf *io_perf, uint level)
-      : m_io_perf_ptr(io_perf), m_tx(nullptr), m_level(level) {
-    m_io_perf_ptr->start(m_level);
+  explicit Rdb_perf_context_guard(Rdb_io_perf *io_perf, THD *thd)
+      : m_io_perf_ptr(io_perf), m_tx(nullptr), m_thd(thd) {
+    m_io_perf_ptr->start(rocksdb_perf_context_level(m_thd));
   }
 
-  explicit Rdb_perf_context_guard(Rdb_transaction *tx, uint level)
-      : m_io_perf_ptr(nullptr), m_tx(tx), m_level(level) {
+  explicit Rdb_perf_context_guard(Rdb_transaction *tx, THD *thd)
+      : m_io_perf_ptr(nullptr), m_tx(tx), m_thd(thd) {
     /*
       if perf_context information is already being recorded, this becomes a
       no-op
@@ -4877,7 +4877,7 @@ class Rdb_perf_context_guard {
     if (m_tx != nullptr) {
       m_tx->io_perf_end_and_record();
     } else if (m_io_perf_ptr != nullptr) {
-      m_io_perf_ptr->end_and_record(m_level);
+      m_io_perf_ptr->end_and_record(m_thd);
     }
   }
 };
@@ -5205,7 +5205,7 @@ static int rocksdb_commit(handlerton *const hton, THD *const thd,
   Rdb_transaction *tx = get_tx_from_thd(thd);
 
   /* this will trigger saving of perf_context information */
-  Rdb_perf_context_guard guard(tx, rocksdb_perf_context_level(thd));
+  Rdb_perf_context_guard guard(tx, thd);
 
   if (tx != nullptr) {
     if (commit_tx || (!my_core::thd_test_options(
@@ -5242,7 +5242,7 @@ static int rocksdb_commit(handlerton *const hton, THD *const thd,
 static int rocksdb_rollback(handlerton *const hton, THD *const thd,
                             bool rollback_tx) {
   Rdb_transaction *tx = get_tx_from_thd(thd);
-  Rdb_perf_context_guard guard(tx, rocksdb_perf_context_level(thd));
+  Rdb_perf_context_guard guard(tx, thd);
 
   if (tx != nullptr) {
     if (rollback_tx) {
@@ -5857,7 +5857,7 @@ static int rocksdb_start_tx_and_assign_read_view(
   ulong const tx_isolation = my_core::thd_tx_isolation(thd);
 
   Rdb_transaction *tx = get_or_create_tx(thd);
-  Rdb_perf_context_guard guard(tx, rocksdb_perf_context_level(thd));
+  Rdb_perf_context_guard guard(tx, thd);
 
   assert(!tx->has_snapshot());
   tx->set_tx_read_only(true);
@@ -7737,8 +7737,7 @@ int ha_rocksdb::open(const char *const name, int mode, uint test_if_locked,
   m_io_perf.init(&m_table_handler->m_table_perf_context,
                  &m_table_handler->m_io_perf_read, &stats);
 
-  Rdb_perf_context_guard guard(&m_io_perf,
-                               rocksdb_perf_context_level(ha_thd()));
+  Rdb_perf_context_guard guard(&m_io_perf, ha_thd());
 
   std::string fullname;
   err = rdb_normalize_tablename(name, &fullname);

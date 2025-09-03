@@ -125,6 +125,8 @@ enum table_cardinality_scan_type {
   SCAN_TYPE_FULL_TABLE,
 };
 
+uint32_t rocksdb_perf_context_level(THD *const thd);
+
 enum Rdb_lock_type { RDB_LOCK_NONE, RDB_LOCK_READ, RDB_LOCK_WRITE };
 
 class blob_buffer {
