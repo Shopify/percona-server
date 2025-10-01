@@ -4290,6 +4290,14 @@ err:
   return error;
 }
 
+bool ha_innopart::has_gap_locks() const noexcept {
+  THD *thd = ha_thd();
+  if (thd != nullptr && thd->variables.innodb_detect_gap_lock_usage) {
+    return false;
+  }
+  return true;
+}
+
 /****************************************************************************
 DS-MRR implementation
  ***************************************************************************/

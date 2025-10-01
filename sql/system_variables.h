@@ -703,6 +703,13 @@ struct System_variables {
   ulong gap_lock_raise_error;
 
   /**
+    @sa Sys_innodb_detect_gap_lock_usage
+    When true, InnoDB will detect and report gap lock usage through
+    warnings or errors based on gap_lock_raise_error setting
+  */
+  bool innodb_detect_gap_lock_usage;
+
+  /**
     Used to specify the JSON format version used by EXPLAIN FORMAT=JSON with
     the old (non-hypergraph) join optimizer.
     @sa Sys_explain_json_format_version

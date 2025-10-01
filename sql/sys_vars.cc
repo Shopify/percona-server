@@ -5931,6 +5931,15 @@ static Sys_var_enum Sys_gap_lock_raise_error(
     SESSION_VAR(gap_lock_raise_error), CMD_LINE(OPT_ARG), gap_lock_raise_values,
     DEFAULT(THD::GAP_LOCK_RAISE_OFF));
 
+static Sys_var_bool Sys_innodb_detect_gap_lock_usage(
+    "innodb_detect_gap_lock_usage",
+    "When enabled, InnoDB will detect queries that rely on gap locks and "
+    "report them based on the gap_lock_raise_error setting. This is useful "
+    "for identifying queries that would have issues on storage engines without "
+    "gap lock support. Default is OFF",
+    HINT_UPDATEABLE SESSION_VAR(innodb_detect_gap_lock_usage),
+    CMD_LINE(OPT_ARG), DEFAULT(false));
+
 static Sys_var_ulong Sys_group_concat_max_len(
     "group_concat_max_len",
     "The maximum length of the result of function  GROUP_CONCAT()",

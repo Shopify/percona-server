@@ -8724,6 +8724,11 @@ bool handler::is_using_prohibited_gap_locks(TABLE *table,
                                             bool using_full_primary_key) const
     noexcept {
   const THD *thd = table->in_use;
+  
+  if (thd == nullptr || thd->is_system_thread()) {
+    return false;
+  }
+  
   const thr_lock_type lock_type = table->reginfo.lock_type;
 
   if (!using_full_primary_key && has_transactions() && !has_gap_locks() &&
@@ -8741,8 +8746,10 @@ bool handler::is_using_prohibited_gap_locks(TABLE *table,
     if (thd->gap_lock_raise_warning()) {
       // Build a warning message that includes the query
       std::string msg(ER_THD(thd, ER_GAP_LOCK_USED));
-      msg.append(" Query: ");
-      msg.append(thd->query().str);
+      if (thd->query().str != nullptr) {
+        msg.append(" Query: ");
+        msg.append(thd->query().str);
+      }
 
       // Push the warning with the full message including the query
       push_warning(const_cast<THD *>(thd), Sql_condition::SL_WARNING,
@@ -8751,9 +8758,14 @@ bool handler::is_using_prohibited_gap_locks(TABLE *table,
       // Return false to allow the statement to proceed (not block it)
       return false;
     } else if (thd->gap_lock_raise_error()) {
-      std::string msg(ER_THD(thd, ER_GAP_LOCK_USED));
-      msg.append(" Query: %s");
-      my_printf_error(ER_UNKNOWN_ERROR, msg.c_str(), MYF(0), thd->query().str);
+      if (thd->query().str != nullptr) {
+        std::string msg(ER_THD(thd, ER_GAP_LOCK_USED));
+        msg.append(" Query: %s");
+        my_printf_error(ER_UNKNOWN_ERROR, msg.c_str(), MYF(0), thd->query().str);
+      } else {
+        my_printf_error(ER_UNKNOWN_ERROR, "%s", MYF(0), 
+                        ER_THD(thd, ER_GAP_LOCK_USED));
+      }
       return true;
     }
   }
