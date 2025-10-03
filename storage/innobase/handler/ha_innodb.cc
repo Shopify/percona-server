@@ -11495,6 +11495,14 @@ int ha_innobase::index_last(uchar *buf) /*!< in/out: buffer for the row */
   return error;
 }
 
+bool ha_innobase::has_gap_locks() const noexcept {
+  THD *thd = ha_thd();
+  if (thd != nullptr && thd->variables.innodb_detect_gap_lock_usage) {
+    return false;
+  }
+  return true;
+}
+
 int ha_innobase::sample_init(void *&scan_ctx, double sampling_percentage,
                              int sampling_seed,
                              enum_sampling_method sampling_method,

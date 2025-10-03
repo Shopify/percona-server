@@ -4616,9 +4616,15 @@ void handler::print_error(int error, myf errflag) {
     case HA_ERR_LOCK_TABLE_FULL:
       textno = ER_LOCK_TABLE_FULL;
       break;
-    case HA_ERR_LOCK_DEADLOCK:
-      textno = ER_LOCK_DEADLOCK;
-      break;
+    case HA_ERR_LOCK_DEADLOCK: {
+      String str,
+          full_err_msg(ER_DEFAULT(ER_LOCK_DEADLOCK), system_charset_info);
+      get_error_message(error, &str);
+      full_err_msg.append(str);
+      my_printf_error(ER_LOCK_DEADLOCK, "%s", errflag,
+                      full_err_msg.c_ptr_safe());
+      return;
+    }
     case HA_ERR_READ_ONLY_TRANSACTION:
       textno = ER_READ_ONLY_TRANSACTION;
       break;
@@ -8718,10 +8724,16 @@ bool handler::is_using_prohibited_gap_locks(TABLE *table,
                                             bool using_full_primary_key) const
     noexcept {
   const THD *thd = table->in_use;
+  
+  if (thd == nullptr || thd->is_system_thread()) {
+    return false;
+  }
+  
   const thr_lock_type lock_type = table->reginfo.lock_type;
 
   if (!using_full_primary_key && has_transactions() && !has_gap_locks() &&
       thd_tx_isolation(thd) >= ISO_REPEATABLE_READ && !thd->rli_slave &&
+      thd->gap_lock_raise_allowed() &&
       (thd->lex->table_count >= 2 || thd->in_multi_stmt_transaction_mode()) &&
       (lock_type >= TL_WRITE_ALLOW_WRITE ||
        lock_type == TL_READ_WITH_SHARED_LOCKS ||
@@ -8731,15 +8743,31 @@ bool handler::is_using_prohibited_gap_locks(TABLE *table,
       thd->lex->sql_command != SQLCOM_CREATE_INDEX &&
       thd->lex->sql_command != SQLCOM_CHECK &&
       thd->lex->sql_command != SQLCOM_OPTIMIZE) {
-    my_printf_error(ER_UNKNOWN_ERROR,
-                    "Using Gap Lock without full unique key in multi-table "
-                    "or multi-statement transactions is not "
-                    "allowed. You need to either rewrite queries to use "
-                    "all unique key columns in WHERE equal conditions, or "
-                    "rewrite to single-table, single-statement "
-                    "transaction.  Query: %s",
-                    MYF(0), thd->query().str);
-    return true;
+    if (thd->gap_lock_raise_warning()) {
+      // Build a warning message that includes the query
+      std::string msg(ER_THD(thd, ER_GAP_LOCK_USED));
+      if (thd->query().str != nullptr) {
+        msg.append(" Query: ");
+        msg.append(thd->query().str);
+      }
+
+      // Push the warning with the full message including the query
+      push_warning(const_cast<THD *>(thd), Sql_condition::SL_WARNING,
+                   ER_GAP_LOCK_USED, msg.c_str());
+
+      // Return false to allow the statement to proceed (not block it)
+      return false;
+    } else if (thd->gap_lock_raise_error()) {
+      if (thd->query().str != nullptr) {
+        std::string msg(ER_THD(thd, ER_GAP_LOCK_USED));
+        msg.append(" Query: %s");
+        my_printf_error(ER_UNKNOWN_ERROR, msg.c_str(), MYF(0), thd->query().str);
+      } else {
+        my_printf_error(ER_UNKNOWN_ERROR, "%s", MYF(0), 
+                        ER_THD(thd, ER_GAP_LOCK_USED));
+      }
+      return true;
+    }
   }
   return false;
 }
