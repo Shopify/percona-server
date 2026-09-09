@@ -2364,11 +2364,28 @@ class Call_close_conn : public Do_THD_Impl {
              (long)closing_thd->thread_id(),
              (main_sctx_user.length ? main_sctx_user.str : ""));
       /*
-        Do not generate EVENT_TRACKING_CONNECTION_DISCONNECT event, when closing
-        thread close sessions. Each session will generate DISCONNECT event by
-        itself.
+        Only break the connection here, do not tear the session down.
+        Shutting the vio down wakes the owning thread, which then runs
+        close_connection() and therefore Security_context::logout() itself.
+
+        Running that teardown from this thread would free session state that
+        belongs to a different, still running thread. Both threads would
+        observe a non-NULL m_acl_map, both would return the same Acl_map
+        reference to the cache, and both would walk m_active_roles calling
+        my_free() on the same strings. It would also race the owning thread's
+        ordinary use of its own security context, for example a concurrent
+        SET ROLE in Security_context::checkout_access_maps(), which releases
+        and re-checks out the map while reading m_active_roles.
+
+        The Acl_map reference is still released promptly: the owning thread
+        reaches close_connection() when it wakes, and failing that
+        ~Security_context() calls destroy(). Both happen before
+        wait_till_no_thd() below returns.
+
+        No EVENT_TRACKING_CONNECTION_DISCONNECT event is generated here.
+        Each session generates its own DISCONNECT event as it closes.
       */
-      close_connection(closing_thd, 0, is_server_shutdown, false);
+      closing_thd->disconnect(is_server_shutdown);
     }
   }
 
