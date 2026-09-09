@@ -1225,6 +1225,28 @@ void close_connection(THD *thd, uint sql_errno, bool server_shutdown,
 #endif /* HAVE_PSI_THREAD_INTERFACE */
   }
 
+  /*
+    Everything above is safe to run against a THD owned by another thread:
+    disconnect() takes LOCK_thd_data and only breaks the connection. The
+    session teardown below is not. It releases the Acl_map reference and
+    frees m_active_roles and the strings it owns, so it has to run on the
+    session's own thread. Two threads reaching it for one THD both observe a
+    non-NULL m_acl_map, both release the same reference and both my_free()
+    the same strings.
+
+    close_connections() used to violate this during shutdown by calling
+    close_connection() on every THD from the signal thread. Assert the
+    ownership rule so that a future caller reintroducing that cannot do so
+    unnoticed.
+
+    The exception is handle_bootstrap(), which calls close_connection() on
+    the my_thread_init() failure path before it reaches store_globals(), so
+    current_thd is not set yet. Those THDs are never shared with another
+    thread. No client session is a system thread, so the carve-out does not
+    weaken the check where it matters.
+  */
+  assert(current_thd == thd || thd->is_system_thread());
+
   thd->security_context()->logout();
 }
 
