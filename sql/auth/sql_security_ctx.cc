@@ -106,8 +106,8 @@ void Security_context::logout() {
                 m_user.c_ptr(), m_host.c_ptr(), m_acl_map->reference_count()));
     get_global_acl_cache()->return_acl_map(m_acl_map);
     m_acl_map = nullptr;
-    clear_active_roles();
   }
+  clear_active_roles();
   clear_db_restrictions();
 }
 
@@ -141,9 +141,9 @@ void Security_context::destroy() {
          "Map reference count= %u",
          m_user.c_ptr(), m_host.c_ptr(), m_acl_map->reference_count()));
     get_global_acl_cache()->return_acl_map(m_acl_map);
-    clear_active_roles();
   }
   m_acl_map = nullptr;
+  clear_active_roles();
   if (m_user.length())
     m_user.set((const char *)nullptr, 0, system_charset_info);
 
