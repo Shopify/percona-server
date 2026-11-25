@@ -167,8 +167,17 @@ struct alignas(128) thread_group_t : thread_group_data_t {
 static_assert(sizeof(thread_group_t) == 512,
               "sizeof(thread_group_t) must be 512 to avoid false sharing");
 
-static thread_group_t all_groups[MAX_THREAD_GROUPS];
+// Group zero is reserved for admin port connections, in addition to the
+// thread_pool_size regular groups. group_count includes the admin group.
+static thread_group_t all_groups[MAX_THREAD_GROUPS + 1];
+static thread_group_t *const admin_group = &all_groups[0];
 static uint group_count;
+
+static thread_group_t *connection_group(const THD *thd) {
+  return thd->is_admin_connection()
+             ? admin_group
+             : &all_groups[1 + thd->thread_id() % (group_count - 1)];
+}
 
 /**
  Used for printing "pool blocked" message, see
@@ -191,10 +200,8 @@ static pool_timer_t pool_timer;
 static void queue_put(thread_group_t *thread_group, connection_t *connection);
 static int wake_thread(thread_group_t *thread_group) noexcept;
 static void handle_event(connection_t *connection);
-static int wake_or_create_thread(thread_group_t *thread_group,
-                                 bool admin_connection = false);
-static int create_worker(thread_group_t *thread_group,
-                         bool admin_connection = false) noexcept;
+static int wake_or_create_thread(thread_group_t *thread_group);
+static int create_worker(thread_group_t *thread_group) noexcept;
 static void *worker_main(void *param);
 static void check_stall(thread_group_t *thread_group);
 static void connection_abort(connection_t *connection);
@@ -820,17 +827,19 @@ static void add_thread_count(thread_group_t *thread_group,
 
   NOTE: in rare cases, the number of threads can exceed
   threadpool_max_threads, because we need at least 2 threads
-  per group to prevent deadlocks (one listener + one worker)
+  per group to prevent deadlocks (one listener + one worker).
+  The admin group is exempt from the limit so that both new logins and
+  statements on existing admin connections can make progress when workers
+  are blocked, including workers in the admin group itself.
 */
 
-static int create_worker(thread_group_t *thread_group,
-                         bool admin_connection) noexcept {
+static int create_worker(thread_group_t *thread_group) noexcept {
   my_thread_handle thread_id;
   bool max_threads_reached = false;
   int err;
 
   DBUG_ENTER("create_worker");
-  if (!admin_connection &&
+  if (thread_group != admin_group &&
       tp_stats.num_worker_threads.load(std::memory_order_relaxed) >=
           (int)threadpool_max_threads &&
       thread_group->thread_count >= 2) {
@@ -890,11 +899,10 @@ static ulonglong microsecond_throttling_interval(
   Worker creation is throttled, so we avoid too many threads
   to be created during the short time.
 
-  If admin_connection is true, a new thread is created regardless of any other
-  limits.
+  Worker creation for the admin group bypasses throttling and the global
+  thread limit, but still reuses idle workers and is bounded by its connections.
 */
-static int wake_or_create_thread(thread_group_t *thread_group,
-                                 bool admin_connection) {
+static int wake_or_create_thread(thread_group_t *thread_group) {
   DBUG_ENTER("wake_or_create_thread");
 
   if (thread_group->shutdown) DBUG_RETURN(0);
@@ -904,14 +912,14 @@ static int wake_or_create_thread(thread_group_t *thread_group,
   if (thread_group->thread_count > thread_group->connection_count)
     DBUG_RETURN(-1);
 
-  if (thread_group->active_thread_count == 0 || admin_connection) {
+  if (thread_group->active_thread_count == 0 || thread_group == admin_group) {
     /*
      We're better off creating a new thread here  with no delay, either there
      are no workers at all, or they all are all blocking and there was no
      idle  thread to wakeup. Smells like a potential deadlock or very slowly
      executing requests, e.g sleeps or user locks.
     */
-    DBUG_RETURN(create_worker(thread_group, admin_connection));
+    DBUG_RETURN(create_worker(thread_group));
   }
 
   const ulonglong now = my_microsecond_getsystime();
@@ -1043,7 +1051,7 @@ static void queue_put(thread_group_t *thread_group, connection_t *connection) {
     thread_group->queue.push_back(connection);
   }
   if (thread_group->active_thread_count == 0)
-    wake_or_create_thread(thread_group, connection->thd->is_admin_connection());
+    wake_or_create_thread(thread_group);
 
   mysql_mutex_unlock(&thread_group->mutex);
 
@@ -1289,7 +1297,7 @@ bool Thread_pool_connection_handler::add_connection(
   thd->event_scheduler.data = connection;
 
   /* Assign connection to a group. */
-  thread_group_t *group = &all_groups[thd->thread_id() % group_count];
+  thread_group_t *group = connection_group(thd);
 
   connection->thread_group = group;
 
@@ -1444,10 +1452,10 @@ static int start_io(connection_t *connection) {
     to ensure equal load between groups.
 
     So we recalculate in which group the connection should be, based
-    on thread_id and current group count, and migrate if necessary.
+    on thread_id and current group count, and migrate if necessary. Admin
+    connections always stay in their dedicated group, including after a resize.
   */
-  thread_group_t *const group =
-      &all_groups[connection->thd->thread_id() % group_count];
+  thread_group_t *const group = connection_group(connection->thd);
 
   if (group != connection->thread_group) {
     if (change_group(connection, connection->thread_group, group)) return -1;
@@ -1540,7 +1548,7 @@ bool tp_init() {
     thread_group_init(&all_groups[i], get_connection_attrib());
   }
   tp_set_threadpool_size(threadpool_size);
-  if (group_count == 0) {
+  if (group_count < 2) {
     /* Something went wrong */
     sql_print_error("Can't set threadpool size to %d", threadpool_size);
     DBUG_RETURN(true);
@@ -1572,7 +1580,9 @@ void tp_set_threadpool_size(uint size) noexcept {
   if (!threadpool_started) return;
 
   bool success = true;
-  for (uint i = 0; i < size; i++) {
+  // Include the admin group without reducing the number of regular groups.
+  assert(size <= MAX_THREAD_GROUPS);
+  for (uint i = 0; i <= size; i++) {
     thread_group_t *group = &all_groups[i];
     mysql_mutex_lock(&group->mutex);
     if (group->pollfd == -1) {
@@ -1588,7 +1598,7 @@ void tp_set_threadpool_size(uint size) noexcept {
       return;
     }
   }
-  group_count = size;
+  group_count = size + 1;
 }
 
 void tp_set_threadpool_stall_limit(uint limit) noexcept {
