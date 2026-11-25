@@ -1,0 +1,51 @@
+# Admin port connections share a dedicated thread group that can grow
+# past the thread limit, even for statements on existing connections.
+# restart:--thread-handling=pool-of-threads --thread-pool-size=1 --thread-pool-max-threads=2 --admin-address=127.0.0.1 --innodb-lock-wait-timeout=120
+CREATE TABLE t1 (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1, 0);
+# Open admin connections before saturating the pool, and resize it.
+SET GLOBAL thread_pool_size = 2;
+SELECT @@GLOBAL.thread_pool_size;
+@@GLOBAL.thread_pool_size
+2
+SET GLOBAL thread_pool_size = 1;
+SELECT @@GLOBAL.thread_pool_size;
+@@GLOBAL.thread_pool_size
+1
+BEGIN;
+SELECT id FROM t1 WHERE id = 1 FOR UPDATE;
+id
+1
+# Both regular workers block; a third regular statement cannot start.
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+# Block admin workers too. The existing admin connection still works.
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+SELECT COUNT(DISTINCT REQUESTING_ENGINE_TRANSACTION_ID) AS blocked_statements FROM performance_schema.data_lock_waits;
+blocked_statements
+4
+SELECT VARIABLE_VALUE >= 5 AS admin_workers_in_pool
+FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Threadpool_threads';
+admin_workers_in_pool
+1
+# New admin connections can also log in while the regular pool is full.
+SELECT 'new admin connection ok';
+new admin connection ok
+new admin connection ok
+# The existing admin connection clears the pile-up.
+KILL QUERY ADM1_ID;
+KILL QUERY ADM2_ID;
+KILL QUERY W1_ID;
+KILL QUERY W2_ID;
+ERROR 70100: Query execution was interrupted
+ERROR 70100: Query execution was interrupted
+ERROR 70100: Query execution was interrupted
+ERROR 70100: Query execution was interrupted
+ROLLBACK;
+SELECT v FROM t1;
+v
+1
+DROP TABLE t1;
+# restart
