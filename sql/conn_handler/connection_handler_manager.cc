@@ -68,6 +68,9 @@ ulong Connection_handler_manager::thread_handling =
     SCHEDULER_ONE_THREAD_PER_CONNECTION;
 uint Connection_handler_manager::max_threads = 0;
 
+// Runs admin port connections when thread_handling is pool-of-threads.
+static Per_thread_connection_handler admin_connection_handler;
+
 /**
   Helper functions to allow mysys to call the thread scheduler when
   waiting for locks.
@@ -284,7 +287,14 @@ void Connection_handler_manager::process_new_connection(
     return;
   }
 
-  if (m_connection_handler->add_connection(channel_info)) {
+  Connection_handler *handler = m_connection_handler;
+  // A dedicated thread keeps admin connections usable when every pool worker
+  // is blocked.
+  if (channel_info->is_admin_connection() &&
+      thread_handling == SCHEDULER_THREAD_POOL)
+    handler = &admin_connection_handler;
+
+  if (handler->add_connection(channel_info)) {
     inc_aborted_connects();
     delete channel_info;
   }
